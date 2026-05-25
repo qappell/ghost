@@ -16,7 +16,8 @@ const internal_os = @import("../os/main.zig");
 const renderer = @import("../renderer.zig");
 const terminal = @import("../terminal/main.zig");
 const CoreApp = @import("../App.zig");
-const CoreInspector = @import("../inspector/main.zig").Inspector;
+const inspectorpkg = @import("../inspector/main.zig");
+const CoreInspector = inspectorpkg.Inspector;
 const CoreSurface = @import("../Surface.zig");
 const configpkg = @import("../config.zig");
 const Config = configpkg.Config;
@@ -1778,6 +1779,42 @@ pub const CAPI = struct {
     /// Send this for raw keypresses (i.e. the keyDown event on macOS).
     /// This will handle the keymap translation and send the appropriate
     /// key and char events.
+    /// Record a key event in the terminal inspector without executing any bindings.
+    export fn ghostty_surface_record_inspector_key(
+        surface: *Surface,
+        event: KeyEvent,
+        c_flags: ?*input.Binding.Flags.C,
+    ) void {
+        const core_event = event.keyEvent().core() orelse return;
+        if (surface.core_surface.inspector == null) return;
+
+        var copy = core_event;
+        copy.utf8 = "";
+        if (core_event.utf8.len > 0) copy.utf8 = surface.core_surface.alloc.dupe(u8, core_event.utf8) catch &.{};
+
+        var insp_ev: inspectorpkg.KeyEvent = .{ .event = copy };
+
+        // Record the event in the inspector so the user can see the key press and binding triggered.
+        if (surface.core_surface.config.keybind.set.getEvent(core_event)) |entry| {
+            const actions = switch (entry.value_ptr.*) {
+                .leader => &.{},
+                inline .leaf, .leaf_chained => |leaf| leaf.generic().actionsSlice(),
+            };
+            insp_ev.binding = surface.core_surface.alloc.dupe(
+                input.Binding.Action,
+                actions,
+            ) catch &.{};
+        }
+
+        if (c_flags) |_| {}
+
+        if (surface.core_surface.inspector.?.recordKeyEvent(surface.core_surface.alloc, insp_ev)) {
+            surface.queueInspectorRender();
+        } else |_| {
+            insp_ev.deinit(surface.core_surface.alloc);
+        }
+    }
+
     export fn ghostty_surface_key(
         surface: *Surface,
         event: KeyEvent,

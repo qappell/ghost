@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import GhosttyKit
 
 extension Ghostty {
     /// The manager that's responsible for updating shortcuts of Ghostty's app menu
@@ -127,8 +128,19 @@ extension Ghostty.MenuShortcutManager {
         }
 
         init?(event: NSEvent) {
-            guard let keyEquivalent = event.charactersIgnoringModifiers else { return nil }
-            self.init(keyEquivalent: keyEquivalent, modifiers: event.modifierFlags)
+            guard let keyEquivalent = event.ghosttyCharacters else { return nil }
+
+            // Unset consumed modifiers to match the stored menu shortcuts exactly.
+            let ghosttyEvent = event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
+            var cleanMods = event.modifierFlags
+            if ghosttyEvent.consumed_mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue != 0 {
+                cleanMods.remove(.shift)
+            }
+            if ghosttyEvent.consumed_mods.rawValue & GHOSTTY_MODS_ALT.rawValue != 0 {
+                cleanMods.remove(.option)
+            }
+
+            self.init(keyEquivalent: keyEquivalent, modifiers: cleanMods)
         }
 
         /// Create from a `NSMenuItem`

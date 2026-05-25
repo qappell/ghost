@@ -33,9 +33,8 @@ extension NSEvent {
                 .subtracting([.control, .command]))
 
         // Our unshifted codepoint is the codepoint with no modifiers. We
-        // ignore multi-codepoint values. We have to use `byApplyingModifiers`
-        // instead of `charactersIgnoringModifiers` because the latter changes
-        // behavior with ctrl pressed and we don't want any of that.
+        // ignore multi-codepoint values. We use our robust, layout-aware
+        // helper to get the unshifted character.
         key_ev.unshifted_codepoint = 0
         if type == .keyDown || type == .keyUp {
             if let chars = characters(byApplyingModifiers: []),
@@ -51,17 +50,29 @@ extension NSEvent {
     ///
     /// This namely contains logic to avoid control characters, since we handle control character
     /// mapping manually within Ghostty.
+    ///
+    /// Apple suppresses `characters` when Command is held (returns "").
+    /// We fall back to translating modifiers explicitly using `characters(byApplyingModifiers:)`
+    /// with only the non-command and non-control modifiers (such as Shift and Option).
+    /// This is completely layout-independent and bypasses all Command suppression/translation quirks.
+    ///   Cmd+=              → "="   (no Shift in event)
+    ///   Cmd+Shift+=        → "+"   (Shift+= on US QWERTY)
+    ///   Cmd+Shift+3 (CA FR)→ "/"   (Shift+3 on Canadian French)
+    ///   Ctrl+key           → stays on `characters` (not suppressed)
     var ghosttyCharacters: String? {
-        // If we have no characters associated with this event we do nothing.
+        if modifierFlags.contains(.command) || modifierFlags.contains(.control) {
+            let activeMods = modifierFlags.intersection([.shift, .option, .capsLock])
+            return self.characters(byApplyingModifiers: activeMods)
+        }
+
         guard let characters else { return nil }
 
         if characters.count == 1,
            let scalar = characters.unicodeScalars.first {
             // If we have a single control character, then we return the characters
-            // without control pressed. We do this because we handle control character
-            // encoding directly within Ghostty's KeyEncoder.
+            // without control and command pressed.
             if scalar.value < 0x20 {
-                return self.characters(byApplyingModifiers: modifierFlags.subtracting(.control))
+                return self.characters(byApplyingModifiers: modifierFlags.subtracting([.control, .command]))
             }
 
             // If we have a single value in the PUA, then it's a function key and

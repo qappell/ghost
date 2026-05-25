@@ -2651,8 +2651,10 @@ pub const Set = struct {
     /// Get an entry for the given key event. This will attempt to find
     /// a binding using multiple parts of the event in the following order:
     ///
-    ///   1. Physical key (event.physical_key)
-    ///   2. Unshifted Unicode codepoint (event.unshifted_codepoint)
+    ///   1. Physical key (event.physical_key) with raw modifiers
+    ///   2. Unshifted Unicode codepoint (event.unshifted_codepoint) with raw modifiers
+    ///   3. Produced Unicode codepoint (event.utf8) with modifiers masked when its
+    ///      folded value differs from the folded unshifted codepoint
     ///
     pub fn getEvent(self: *const Set, event: KeyEvent) ?Entry {
         var trigger: Trigger = .{
@@ -2660,6 +2662,13 @@ pub const Set = struct {
             .key = .{ .physical = event.key },
         };
         if (self.get(trigger)) |v| return v;
+
+        // Match the raw modifier set against the unshifted codepoint
+        trigger.mods = event.mods.binding();
+        if (event.unshifted_codepoint > 0) {
+            trigger.key = .{ .unicode = event.unshifted_codepoint };
+            if (self.get(trigger)) |v| return v;
+        }
 
         // If our UTF-8 text is exactly one codepoint, we try to match that.
         if (event.utf8.len > 0) unicode: {
@@ -2670,16 +2679,15 @@ pub const Set = struct {
             const cp = it.nextCodepoint() orelse break :unicode;
             if (it.nextCodepoint() != null) break :unicode;
 
-            trigger.key = .{ .unicode = cp };
-            if (self.get(trigger)) |v| return v;
-        }
+            // Use effectiveMods if the produced character fundamentally
+            // differs from the unshifted_codepoint after case folding.
+            const case_change_only = event.unshifted_codepoint > 0 and std.meta.eql(
+                Trigger.foldedCodepoint(cp),
+                Trigger.foldedCodepoint(event.unshifted_codepoint),
+            );
 
-        // Finally fallback to the full unshifted codepoint if we have one.
-        // Question: should we be doing this if we have UTF-8 text? I
-        // suspect "no" but we don't currently have any failing scenarios
-        // to verify this.
-        if (event.unshifted_codepoint > 0) {
-            trigger.key = .{ .unicode = event.unshifted_codepoint };
+            trigger.mods = if (case_change_only) event.mods.binding() else event.effectiveMods().binding();
+            trigger.key = .{ .unicode = cp };
             if (self.get(trigger)) |v| return v;
         }
 

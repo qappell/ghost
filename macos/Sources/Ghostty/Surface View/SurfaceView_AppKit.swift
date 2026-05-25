@@ -1279,7 +1279,7 @@ extension Ghostty {
             // Get information about if this is a binding.
             let bindingFlags = surfaceModel.flatMap { surface in
                 var ghosttyEvent = event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
-                return (event.characters ?? "").withCString { ptr in
+                return (event.ghosttyCharacters ?? "").withCString { ptr in
                     ghosttyEvent.text = ptr
                     return surface.keyIsBinding(ghosttyEvent)
                 }
@@ -1299,12 +1299,61 @@ extension Ghostty {
                    bindingFlags.contains(.consumed) {
                     if let appDelegate = NSApp.delegate as? AppDelegate,
                        appDelegate.performGhosttyBindingMenuKeyEquivalent(with: event) {
+
+                        // Menu dispatched the action, so keyDown is bypassed.
+                        // Log the raw key event to the terminal inspector so the user can see it.
+                        if let surface = self.surface {
+                            var ghosttyEvent = event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
+                            (event.ghosttyCharacters ?? "").withCString { ptr in
+                                ghosttyEvent.text = ptr
+                                var cFlags = ghostty_binding_flags_e(bindingFlags.rawValue)
+                                ghostty_surface_record_inspector_key(surface, ghosttyEvent, &cFlags)
+                            }
+                        }
+
                         return true
                     }
                 }
 
                 self.keyDown(with: event)
                 return true
+            }
+
+            // Anti-fuzzy guard: AppKit matches Cmd+Shift+- to the Cmd+- menu
+            // shortcut because charactersIgnoringModifiers returns "-" and the
+            // modifier check is a superset match. If no binding matches the
+            // current event but removing shift WOULD match one, the shift is
+            // a truly irrelevant extra modifier — prevent menu fuzzy-match.
+            if bindingFlags == nil,
+               event.modifierFlags.contains(.shift),
+               event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control),
+               let rawSurface = self.surface
+            {
+                let fewerMods = event.modifierFlags.subtracting(.shift)
+                let probeEvent = NSEvent.keyEvent(
+                    with: event.type,
+                    location: event.locationInWindow,
+                    modifierFlags: fewerMods,
+                    timestamp: event.timestamp,
+                    windowNumber: event.windowNumber,
+                    context: nil,
+                    characters: event.characters(byApplyingModifiers: fewerMods) ?? "",
+                    charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+                    isARepeat: event.isARepeat,
+                    keyCode: event.keyCode
+                )
+                if probeEvent != nil {
+                    var ghosttyEvent = probeEvent!.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
+                    var cFlags = ghostty_binding_flags_e(0)
+                    let isBinding = (probeEvent!.characters ?? "").withCString { ptr in
+                        ghosttyEvent.text = ptr
+                        return ghostty_surface_key_is_binding(rawSurface, ghosttyEvent, &cFlags)
+                    }
+                    if isBinding {
+                        self.keyDown(with: event)
+                        return true
+                    }
+                }
             }
 
             let equivalent: String
@@ -1443,10 +1492,17 @@ extension Ghostty {
             var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent?.modifierFlags)
             key_ev.composing = composing
 
+            let effectiveText: String? = {
+                if let text, !text.isEmpty {
+                    return text
+                }
+                return event.ghosttyCharacters
+            }()
+
             // For text, we only encode UTF8 if we don't have a single control
             // character. Control characters are encoded by Ghostty itself.
             // Without this, `ctrl+enter` does the wrong thing.
-            if let text, text.count > 0,
+            if let text = effectiveText, text.count > 0,
                let codepoint = text.utf8.first, codepoint >= 0x20 {
                 return text.withCString { ptr in
                     key_ev.text = ptr

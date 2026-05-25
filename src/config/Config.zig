@@ -1549,20 +1549,34 @@ class: ?[:0]const u8 = null,
 /// QWERTY keyboard, but will match the `q` key on a AZERTY keyboard
 /// (assuming US physical layout).
 ///
-/// For Unicode codepoints, matching is done by comparing the set of
-/// modifiers with the unmodified codepoint. The unmodified codepoint is
-/// sometimes called an "unshifted character" in other software, but all
-/// modifiers are considered, not only shift. For example, `ctrl+a` will match
-/// `a` but not `ctrl+shift+a` (which is `A` on a US keyboard).
+/// Codepoint matching is case-insensitive: both configured and produced
+/// codepoints are case-folded for comparison. Thus, configuring `ctrl+A`
+/// is identical to configuring `ctrl+a`.
 ///
-/// Further, codepoint matching is case-insensitive and the unmodified
-/// codepoint is always case folded for comparison. As a result,
-/// `ctrl+A` configured will match when `ctrl+a` is pressed. Note that
-/// this means some key combinations are impossible depending on keyboard
-/// layout. For example, `ctrl+_` is impossible on a US keyboard because
-/// `_` is `shift+-` and `ctrl+shift+-` is not equal to `ctrl+_` (because
-/// the modifiers don't match!). More details on impossible key combinations
-/// can be found at this excellent source written by Qt developers:
+/// Key bindings are character-mapped and are affected by locales. For
+/// example, `ctrl+/` will trigger whether `/` is typed with one key on the
+/// US layout or with `shift+3` on the French Canadian layout. Physical key
+/// codes allow triggers to target specific hardware keys instead of the
+/// semantic characters produced by the operating system.
+///
+/// If you want
+/// bindings to respect finger placement across multiple layouts, rather than a character and its accompanying modifiers,
+/// physical key codes are available.
+///
+/// In technical detail, inputs are matched in the following order:
+/// (1) physical key codes with raw modifiers, (2) the unshifted base
+/// character with raw modifiers, and (3) the produced character with
+/// unconsumed modifiers. Step 2 ensures explicit chords like `ctrl+shift+c`
+/// are respected. In step 3, modifiers used for translation (GDK-provided
+/// on Linux; tested via `shift`, `option`, and `capsLock` on macOS) are
+/// masked only if the produced character's folded identity differs from the
+/// unshifted base key.
+///
+/// Over-specifying modifiers in the configuration can make combinations
+/// impossible to match. For example, `ctrl+shift+_` is impossible on a US
+/// keyboard because the OS consumes `shift` to produce `_`. The evaluation
+/// resolves to `ctrl+_`, which fails the unconsumed modifier requirement
+/// for `shift`. More details on layout issues can be found here:
 /// https://doc.qt.io/qt-6/qkeysequence.html#keyboard-layout-issues
 ///
 /// Physical key codes can be specified by using any of the key codes
